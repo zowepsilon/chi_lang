@@ -1,5 +1,7 @@
 # The χ (chi) Programming Language
 
+An imperative programming language that transpiles to C. It features overloadable functions, structs, methods, a module system, extern functions, basic type inference, immutable/mutable references, auto referencing and dereferencing.
+
 ### Getting Started
 
 The `examples/` folder shows the basic syntax and semantics of the language.
@@ -33,131 +35,30 @@ To compile and run a program, simply pass it as the first argument to the compil
 cargo run -- <program.chi>
 ```
 The generated C code and the compiled executable should be located in the `generated/` folder in the current directory.
-Executable generation is only supported on Linux (and perhaps MacOS, untested), though Chi generates a single C file, so manual compilation shouldn't be a problem.
+Executable generation is only supported on Linux (and perhaps MacOS, untested), though Chi generates a single C file, so manual compilation shouldn't be an issue.
 
 ### Tests
 `cargo test` compiles and runs every examples in the `examples/` folder and check if any of them failed to compile or run.
 > All examples should compile and return `0`.
 
-### Roadmap
+### Architecture
 
-#### MVP
-- [x] Immutable/Mutable References `&x`/`!x`
-- [x] Auto (de)referencing
-- [x] Struct methods
-- [ ] Generics
-- [ ] Enums
-- [ ] Nullable Pointers as `Option<!T>` (similar to Rust's null pointer optimization but with C compatibility)
-- [ ] Array support (temporary C semantics)
+- `src/main.rs`: entry point
+- `src/lib.rs`: library root, backbone of the compiler pipeline
 
-#### Easy nice-to-haves
-- [x] Absolute paths
-- [ ] Syntactic sugar: `if *** do stmt`
-- [ ] Operator overloading
-- [ ] Lazily `#include`s (e.g. import `stdbool.h` iff `bool` is used in the file)
-- [ ] Basic ownership
+- `src/lexer.rs`: lexer
+- `src/parser.rs`: recursive descent parser
+- `src/ast.rs`: untyped AST types
 
+- `src/analysis/mod.rs`: multi-pass module declaration analysis, function/statement/expression typing, method resolution
+- `src/analysis/resources.rs`: resource types, resource resolution routines, overload resolution
+- `src/analysis/expression.rs`: typed AST types, lvalue checking, type coercion of arguments
+- `src/analysis/builtins.rs`: builtin types and operator definitions
 
-#### Hard nice-to-haves
-- [ ] Expression decomposition
-    - [ ] Expression-scope blocks
-    - [ ] `unsafe` block that does nothing but make Rust programmers confortable
-    - [ ] Guaranteed function argument evaluation order
-    - [ ] Do not rely on C's operator precedence
-    - [ ] Array as values
-    - [ ] Referencing of rvalue expressions
-- [ ] Traits
-- [ ] Resource visibility
-- [ ] A standard library
-- [ ] Better error messages
-- [ ] `extern` struct declarations
-- [ ] Basic, non-intrusive reference lifetime checking
-- [ ] Macros as functions
-    - [ ] Compile-time code execution
+- `src/transpiler.rs`: transpiles a typed module into a C source file.
+- `src/compilation.rs`: (Linux only) calls `clang` to compile the generated the generated C file.
 
-### Syntax spec
-> [!NOTE]
-> `?sep` indicates that the preceding block can be omitted at the last repetition of a `*` or `+` block.
-```ebnf
-program = statement_list
+### References
 
-statement_list = ("\n" | ";")* ( statement ("\n" | ";")* )*
-
-statement = def_stmt
-          | struct_stmt
-          | extern_stmt
-          | import_stmt
-          | let_stmt
-          | if_stmt
-          | while_stmt
-          | return_stmt
-          | assign_stmt
-          | expression
-
-(* module level statements *)
-pub_stmt = "pub" def_stmt
-         | "pub" struct_stmt
-         | "pub" import_stmt
-
-def_stmt = "def" function_head "{" function_body
-struct_stmt = "struct" IDENTIFIER "{" ( IDENTIFIER ":" type ","?sep )* "}"
-extern_stmt = "extern" STRING "{" extern_body
-import_stmt = "import" resource_path
-            | "import" "." IDENTIFIER
-
-(* let statements can be used at both the module and function level *)
-let_stmt = "let" IDENTIFIER "=" expression
-
-(* function level statements *)
-if_stmt = "if" expression "{" function_body
-    ( "elif" expression "{" function_body )* 
-    ( "else" "{" function_body )?
-
-while_stmt = "while" expression "{" function_body
-return_stmt = "return" expression?
-assign_stmt = expression "=" expression
-
-function_body = statement_list* "}"
-extern_body = "\n"* ( "def" function_head "\n"+ )*
-
-function_head = generic_parameters? IDENTIFIER function_arguments_return
-              | "(" IDENTIFIER ":" type ")" "." IDENTIFIER function_arguments_return
-
-generic_parameters = "<" ( IDENTIFIER ","?sep )* ">"
-function_arguments_return = "(" ( IDENTIFIER ":" type ","?sep )* "..."? ")" ("->" type)?
-resource_path = IDENTIFIER ("." IDENTIFIER)*
-
-(* expressions *)
-expression = equality
-equality = comparison ( ("==" | "!=") comparison)*
-comparison = term ( (">" | "<" | ">=" | "<=") term )*
-term = factor ( ("+" | "-") factor)*
-factor = unary ( ("*" | "/") unary)*
-
-unary = ("not" | "+" | "-" | "&" | "!" | "*") unary
-      | primary
-
-primary = INTEGER
-        | FLOAT
-        | function_call
-        | method_call
-        | struct_member
-        | struct_init
-        | resource_path
-        | STRING
-        | "true"
-        | "false"
-        | "null"
-        | "(" expression ")"
-
-function_call = resource_path "(" ( expression "," )* ")"
-method_call = primary "." IDENTIFIER "(" ( expression "," )* ")"
-struct_member = primary "." IDENTIFIER
-struct_init = IDENTIFIER "{" ( IDENTIFIER ":" expression "," )* "}"
-
-(* type *)
-type = IDENTIFIER
-     | "&" type
-     | "!" type
-     | "(" type ")"
-```
+- https://craftinginterpreters.com/parsing-expressions.html
+- https://github.com/gchatelet/gcc_cpp_mangling_documentation

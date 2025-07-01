@@ -243,11 +243,6 @@ pub(crate) trait Scope: Sized {
                 self.type_member_access(instance, member)
             }
         }
-
-    }
-
-    fn concretize_function(&mut self, path: &[String], ty_args: Vec<Type>) {
-        todo!("{:?} {:?}", path, ty_args)
     }
 }
 
@@ -743,12 +738,12 @@ pub(crate) trait LocatedScope: Scope {
                 for (expected, found) in std::iter::zip(func_args, &typed_args) {
                     // TODO: ownership
                     let should_be_mutable = true;
-
+                    
                     let coercion = match found.type_.coerce_method(self, &expected.1) {
                         Some(way) => way,
                         None => continue 'overloaded_loop,
                     };
-            
+                    
                     coercions.push((coercion, Some(should_be_mutable)))
                 }
             
@@ -898,6 +893,29 @@ pub struct FunctionHead {
     pub(crate) arguments: Vec<(String, MaybeTyped)>,
     pub(crate) is_variadic: Option<bool>,
     pub(crate) no_mangle: bool
+}
+
+impl FunctionHead {
+    fn is_generic(&self, ty: ast::Type) -> bool {
+        use ast::Type;
+        match ty {
+            Type::Path(path) => {
+                if path.len() != 1 {
+                    return false
+                }
+
+                for g in &self.generics {
+                    if g.name == path[0] {
+                        return true;
+                    }
+                }
+
+                return false;
+            },
+            Type::Void => false,
+            Type::Reference { inner, .. } => self.is_generic(*inner)
+        }
+    }
 }
 
 pub(crate) enum VariableOrAttribute<'a> {

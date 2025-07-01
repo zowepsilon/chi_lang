@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Debug;
+use std::ops::Index;
 use std::path::PathBuf;
 use std::{fs, mem, vec, iter, ptr};
 
 use crate::analysis::expression::BinaryOperator;
 use crate::analysis::resources::ResourceKind;
-use crate::ast::{self, FunctionKind};
+use crate::ast::{self, FunctionKind, GenericParam};
 use crate::parser::ParserError;
 use crate::transpiler::ModuleTranspiler;
 use crate::{lexer, parser, TranspileError};
@@ -46,9 +47,9 @@ use analysis_error;
 
 
 #[macro_use]
-pub(crate) mod builtins;
-pub(crate) mod resources;
-pub(crate) mod expression;
+pub mod builtins;
+pub mod resources;
+pub mod expression;
 
 
 #[derive(Debug, Clone)]
@@ -179,8 +180,6 @@ pub struct AnalysisError {
     source: DebugSource
 }
 
-
-
 impl AnalysisError {
     fn with_member(self, member: String) -> Self {
         match self.kind {
@@ -223,6 +222,216 @@ pub(crate) enum Statement {
     Import(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct GenericFunction {
+    pub(crate) generics: Vec<GenericParam>,
+
+    pub(crate) head: FunctionHead,
+    pub(crate) source: Vec<ast::Statement>,
+    pub(crate) specializations: HashMap<Vec<Type>, FunctionScope>,
+}
+
+impl GenericFunction {
+    fn specialize<'a>(&'a mut self, generic_arguments: Vec<Type>) -> Option<&'a FunctionScope> {
+        if self.generics.len() != generic_arguments.len() {
+            return None
+        }
+
+        let specialized_soruce = self.source.iter()
+            .cloned().map(|s| self.specialize_statement(s, &generic_arguments)).collect();
+
+        let specialized_head = self.specialize_head(&generic_arguments);
+
+        let specialized_function = FunctionScope::new(specialized_soruce, specialized_head);
+
+        
+
+        self.specializations.insert(generic_arguments.clone(), specialized_function);
+
+        Some(&self.specializations[&generic_arguments])
+    }
+
+    fn specialize_statement(&self, stmt: ast::Statement, generic_arguments: &[Type]) -> ast::Statement {
+        match stmt {
+            ast::Statement::Expression(expr) => ast::Statement::Expression(self.specialize_expression(expr, generic_arguments)),
+            ast::Statement::LetAssignment { name, value } => {
+                ast::Statement::LetAssignment {
+                    name,
+                    value: self.specialize_expression(value, generic_arguments),
+                }
+            }
+            ast::Statement::Assignment { lhs, rhs } => {
+                ast::Statement::Assignment {
+                    lhs: self.specialize_expression(lhs, generic_arguments), 
+                    rhs: self.specialize_expression(rhs, generic_arguments), 
+                }
+            }
+            ast::Statement::If {
+                conditions_and_bodies,
+                else_body,
+            } => {
+                let conditions_and_bodies = conditions_and_bodies.into_iter()
+                    .map(|(condition, body)| {(
+                        self.specialize_expression(condition, generic_arguments), 
+                        body.into_iter().map(|s| self.specialize_statement(s, generic_arguments)).collect()
+                    )}).collect();
+
+                let else_body = else_body
+                    .map(|body| body.into_iter().map(|s| self.specialize_statement(s, generic_arguments)).collect());
+
+
+                ast::Statement::If { conditions_and_bodies, else_body }
+            }
+            ast::Statement::While { condition, body } => {
+                let condition = self.specialize_expression(condition, generic_arguments);
+
+                let body = body.into_iter()
+                    .map(|s| self.specialize_statement(s, generic_arguments)).collect();
+
+                ast::Statement::While { condition, body }
+            }
+            ast::Statement::Return(expr) => {
+                ast::Statement::Return(expr.map(|x| self.specialize_expression(x, generic_arguments)))
+            }
+            other @ (ast::Statement::FunctionDeclaration { .. }
+            | ast::Statement::ExternFunctionDeclaration { .. }
+            | ast::Statement::ExternBlock { .. }
+            | ast::Statement::StructDeclaration { .. }
+            | ast::Statement::Import { .. }) => analysis_error!(PANIC StatementInWrongContext {
+                statement: other,
+                found_context: "function body",
+            }), // i cannot wait to finish this project asap
+        }
+
+    }
+
+    fn specialize_expression(&self, expr: ast::Expression, generic_arguments: &[Type]) -> ast::Expression {
+        match expr {
+            ast::Expression::Binary { left, operator, right } => {
+                ast::Expression::Binary {
+                    left: Box::new(self.specialize_expression(*left, generic_arguments)),
+                    operator, 
+                    right: Box::new(self.specialize_expression(*right, generic_arguments))
+                }
+            },
+            ast::Expression::Unary { operator, argument } => {
+                ast::Expression::Unary { operator, argument: Box::new(self.specialize_expression(*argument, generic_arguments)) }
+            },
+            ast::Expression::ParenBlock(inner) => ast::Expression::ParenBlock(Box::new(self.specialize_expression(*inner, generic_arguments))),
+            ast::Expression::FunctionCall { mut function, arguments } => {
+                if function.len() == 1 {
+                    for (param, arg) in iter::zip(&self.generics, generic_arguments) {
+                        if param.name == function[0] {
+                            function = match arg {
+                                Type::Path(path) => path.clone(),
+                                other => todo!("figure out what to do then")
+                            };
+                            break;
+                        }
+                    }
+                }
+
+                ast::Expression::FunctionCall {
+                    function,
+                    arguments: arguments.into_iter().map(|e| self.specialize_expression(e, generic_arguments)).collect()
+                }
+            },
+            ast::Expression::MethodCall { instance, method, arguments } => {
+                ast::Expression::MethodCall {
+                    instance: Box::new(self.specialize_expression(*instance, generic_arguments)),
+                    method,
+                    arguments: arguments.into_iter().map(|e| self.specialize_expression(e, generic_arguments)).collect(),
+                }
+            },
+            ast::Expression::StructMember { instance, member } => {
+                ast::Expression::StructMember {
+                    instance: Box::new(self.specialize_expression(*instance, generic_arguments)),
+                    member
+                }
+            }, 
+            ast::Expression::StructInit { mut path, members } => {
+                if path.len() == 1 {
+                    for (param, arg) in iter::zip(&self.generics, generic_arguments) {
+                        if param.name == path[0] {
+                            path = match arg {
+                                Type::Path(path) => path.clone(),
+                                other => todo!("figure out what to do then")
+                            };
+                            break;
+                        }
+                    }
+                }
+
+                ast::Expression::StructInit {
+                    path: path,
+                    members: members.into_iter().map(|(name, expr)| (
+                        name,
+                        self.specialize_expression(expr, generic_arguments)
+                    )).collect(),
+                }
+            },
+            ast::Expression::Variable(mut var) => {
+                if var.len() == 1 {
+                    for (param, arg) in iter::zip(&self.generics, generic_arguments) {
+                        if param.name == var[0] {
+                            var = match arg {
+                                Type::Path(path) => path.clone(),
+                                other => todo!("figure out what to do then")
+                            };
+                            break;
+                        }
+                    }
+                }
+                ast::Expression::Variable(var)
+            },
+            ast::Expression::Literal(lit) => ast::Expression::Literal(lit)
+        }
+    }
+
+    fn specialize_type(&self, ty: ast::Type, generic_arguments: &[Type]) -> ast::Type {
+        match ty {
+            ast::Type::Void => ast::Type::Void,
+            ast::Type::Path(mut path) => {
+                if path.len() == 1 {
+                    for (param, arg) in iter::zip(&self.generics, generic_arguments) {
+                        if param.name == path[0] {
+                            path = match arg {
+                                Type::Path(path) => path.clone(),
+                                other => todo!("figure out what to do then")
+                            };
+                            break;
+                        }
+                    }
+                }
+                ast::Type::Path(path)
+            },
+            ast::Type::Reference { inner, mutable } => {
+                ast::Type::Reference { inner: Box::new(self.specialize_type(*inner, generic_arguments)), mutable }
+            }
+        }
+    }
+
+    fn specialize_head(&self, generic_arguments: &[Type]) -> FunctionHead {
+        let head = &self.head;
+
+        FunctionHead {
+            generics: vec![],
+            return_type: MaybeTyped::Untyped(self.specialize_type(head.return_type.untyped().clone(), generic_arguments)),
+            arguments: head.arguments.iter().map(|(name, ty)| (
+                name.clone(),
+                MaybeTyped::Untyped(self.specialize_type(ty.untyped().clone(), generic_arguments))
+            )).collect(),
+            is_variadic: head.is_variadic,
+            no_mangle: head.no_mangle,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum MaybeGeneric {
+    Generic(GenericFunction),
+    NonGeneric(FunctionScope)
+}
 
 #[derive(Clone, Debug)]
 pub struct FunctionScope {
@@ -476,7 +685,6 @@ impl FunctionScope {
             module: ptr::null_mut()
         }
     }
-
 }
 
 #[derive(Clone)]
@@ -487,7 +695,7 @@ pub struct ModuleScope {
 
     source: Vec<ast::Statement>,
     pub(crate) statements: Vec<Statement>,
-    pub(crate) declared_functions: Vec<(String, FunctionScope)>,
+    pub(crate) declared_functions: Vec<(String, MaybeGeneric)>,
     pub(crate) declared_methods: Vec<(String, FunctionScope)>,
     pub(crate) resources: HashMap<String, Vec<Resource>>,
     pub(crate) externs: Vec<String>,
@@ -535,19 +743,25 @@ impl ModuleScope {
                                     return_type = ast::Type::Path(vec!["int".to_string()]);
                                 }
                             }
+
+                            let has_generics = generics.len() != 0;
                                     
                             let head: FunctionHead = FunctionHead {
-                                generics,
+                                generics: generics.clone(),
                                 return_type: MaybeTyped::Untyped(return_type),
                                 arguments: arguments.into_iter().map(|(name, ty)| (name, MaybeTyped::Untyped(ty))).collect(),
                                 is_variadic: None,
                                 no_mangle: is_main
                             };
-        
-                            let func = FunctionScope::new(body, head.clone());
-        
-                            self.add_resource(name.clone(), Resource { kind: ResourceKind::Function(head), visibility })?;
-                            self.declared_functions.push((name.clone(), func));
+
+                            self.add_resource(name.clone(), Resource { kind: ResourceKind::Function(head.clone()), visibility })?;
+                            
+                            let func = if has_generics {
+                                MaybeGeneric::Generic(GenericFunction { head, generics, source: body, specializations: HashMap::new() })
+                            } else {
+                                MaybeGeneric::NonGeneric(FunctionScope::new(body, head))
+                            };
+                            self.declared_functions.push((name, func));
                         }
                         FunctionKind::Method { receiver: (recv_name, recv_type), name: method_name } => {
                             if is_variadic {
@@ -688,11 +902,13 @@ impl ModuleScope {
         let mut declared_functions = mem::take(&mut self.declared_functions);
 
         for (_, func) in &mut declared_functions {
-            // SAFETY: func has exclusive access to self
-            func.module = self as *mut _;
-            func.declaration_typing_pass()?;
-            // set pointer to null to revoke access to self
-            func.module = ptr::null_mut();
+            if let MaybeGeneric::NonGeneric(func) = func {
+                // SAFETY: func has exclusive access to self
+                func.module = self as *mut _;
+                func.declaration_typing_pass()?;
+                // set pointer to null to revoke access to self
+                func.module = ptr::null_mut();
+            }
         }
 
         self.declared_functions = declared_functions;
@@ -784,11 +1000,13 @@ impl ModuleScope {
         let mut declared_functions = mem::take(&mut self.declared_functions);
 
         for (_, func) in &mut declared_functions {
-            // SAFETY: func has exclusive access to self
-            func.module = self as *mut _;
-            func.execution_pass()?;
-            // set pointer to null to revoke access to self
-            func.module = ptr::null_mut();
+            if let MaybeGeneric::NonGeneric(func) = func {
+                // SAFETY: func has exclusive access to self
+                func.module = self as *mut _;
+                func.execution_pass()?;
+                // set pointer to null to revoke access to self
+                func.module = ptr::null_mut();
+            }
         }
 
         self.declared_functions = declared_functions;

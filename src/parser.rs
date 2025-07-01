@@ -144,10 +144,10 @@ impl Parser {
     binary_operator!(equality, TokenData::Equal | TokenData::NotEqual, comparison);
     binary_operator!(
         comparison,
-        TokenData::Greater
-            | TokenData::Lesser
-            | TokenData::GreatorOrEqual
-            | TokenData::LesserOrEqual,
+        | TokenData::Greater
+        | TokenData::Lesser
+        | TokenData::GreatorOrEqual
+        | TokenData::LesserOrEqual,
         term
     );
     binary_operator!(term, TokenData::Plus | TokenData::Minus, factor);

@@ -6,12 +6,12 @@ use analysis::{AnalysisError, ModuleScope, resources::PACKAGES};
 use compilation::CompilationError;
 use parser::ParserError;
 
-mod analysis;
-mod ast;
+pub mod analysis;
+pub mod ast;
 pub mod compilation;
-mod lexer;
-mod parser;
-mod transpiler;
+pub mod lexer;
+pub mod parser;
+pub mod transpiler;
 
 #[derive(Debug)]
 pub enum TranspileError {

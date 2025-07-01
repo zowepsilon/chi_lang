@@ -250,6 +250,13 @@ impl MaybeTyped {
             Self::Typed(ty) => &ty
         }
     }
+    
+    pub fn untyped(&self) -> &ast::Type {
+        match self {
+            Self::Untyped(ty) => &ty,
+            Self::Typed(_) => panic!("expected untyped arguments")
+        }
+    }
 
     pub(crate) fn analyse(&mut self, scope: &impl LocatedScope) -> Result<(), AnalysisError> {
         match self {
@@ -262,8 +269,6 @@ impl MaybeTyped {
         }
     }
 }
-
-
 
 #[derive(Debug, Clone)]
 pub(crate) enum CoercionMethod {
@@ -324,7 +329,6 @@ impl CoercionMethod {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub enum TypeKind {

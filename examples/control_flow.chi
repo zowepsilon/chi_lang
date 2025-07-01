@@ -3,7 +3,6 @@ extern "<stdio.h>" {
 }
 
 def spicy_add(a: int, b: int) -> int {
-    
     let countdown = 3
     while countdown != 0 {
         printf("Adding in %i...\n", countdown)
@@ -16,10 +15,7 @@ def spicy_add(a: int, b: int) -> int {
         b = b + 2
     } elif b == a {
         b = 2 * b
-    } elif a < b {
-        // printf("BUG: my_variable (%i) does not exist but analysis says it does --> ", only_inside_if)
     } else {
-        // unreachable
         printf("yikes\n")
     }
 

@@ -3,5 +3,5 @@ def main() {
     message = "the message is actually: Hello, Chi!"
 
     // error: expected type `str` found type `int`
-    // message = 42
+    //message = 42
 }

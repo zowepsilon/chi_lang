@@ -1,0 +1,82 @@
+program = statement_list
+
+statement_list = ("\n" | ";")* ( statement ("\n" | ";")* )*
+
+statement = def_stmt
+          | struct_stmt
+          | extern_stmt
+          | import_stmt
+          | let_stmt
+          | if_stmt
+          | while_stmt
+          | return_stmt
+          | assign_stmt
+          | expression
+
+(* module level statements *)
+pub_stmt = "pub" def_stmt
+         | "pub" struct_stmt
+         | "pub" import_stmt
+
+def_stmt = "def" function_head "{" function_body
+struct_stmt = "struct" IDENTIFIER "{" ( IDENTIFIER ":" type ","?sep )* "}"
+extern_stmt = "extern" STRING "{" extern_body
+import_stmt = "import" resource_path
+            | "import" "." IDENTIFIER
+
+(* let statements can be used at both the module and function level *)
+let_stmt = "let" IDENTIFIER "=" expression
+
+(* function level statements *)
+if_stmt = "if" expression "{" function_body
+    ( "elif" expression "{" function_body )* 
+    ( "else" "{" function_body )?
+
+while_stmt = "while" expression "{" function_body
+retrn_stmt = "return" expression?
+assign_stmt = expression "=" expression
+
+function_body = statement_list* "}"
+extern_body = "\n"* ( "def" function_head "\n"+ )*
+
+function_head = generic_parameters? IDENTIFIER function_arguments_return
+              | "(" IDENTIFIER ":" type ")" "." IDENTIFIER function_arguments_return
+
+generic_parameters = "<" ( IDENTIFIER ","?sep )* ">"
+function_arguments_return = "(" ( IDENTIFIER ":" type ","?sep )* "..."? ")" ("->" type)?
+resource_path = IDENTIFIER ("." IDENTIFIER)*
+
+(* expressions *)
+expression = equality
+equality = comparison ( ("==" | "!=") comparison)*
+comparison = term ( (">" | "<" | ">=" | "<=") term )*
+term = factor ( ("+" | "-") factor)*
+factor = unary ( ("*" | "/") unary)*
+
+unary = ("not" | "+" | "-" | "&" | "!" | "*") unary
+      | primary
+
+primary = INTEGER
+        | FLOAT
+        | IDENTIFIER
+        | function_call
+        | method_call
+        | struct_member
+        | struct_init
+        | resource_path
+        | STRING
+        | "true"
+        | "false"
+        | "null"
+        | "(" expression ")"
+
+function_call = resource_path "(" ( expression "," )* ")"
+method_call = primary "." IDENTIFIER "(" ( expression "," )* ")"
+struct_member = primary "." IDENTIFIER
+struct_init = IDENTIFIER "{" ( IDENTIFIER ":" expression "," )* "}"
+
+(* type *)
+type = IDENTIFIER
+     | "&" type
+     | "!" type
+     | "(" type ")"

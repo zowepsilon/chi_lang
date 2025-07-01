@@ -1,7 +1,7 @@
 use std::{collections::{HashMap, HashSet}, fmt::Display};
 
 use crate::{
-    analysis::{ModuleScope, Statement, resources::{Scope, FunctionHead, Resource, ResourceKind, LocatedScope}, expression::{TypeKind, ExpressionData, Type}},
+    analysis::{ModuleScope, Statement, resources::{Scope, FunctionHead, Resource, ResourceKind, LocatedScope}, expression::{TypeKind, ExpressionData, Type}, MaybeGeneric},
     ast::Literal,
 };
 
@@ -40,41 +40,51 @@ impl<'a> ModuleTranspiler<'a> {
         }
 
         for (name, func) in &new.scope.declared_functions {
-            let head_args = func.head.arguments.iter().map(|(name, ty)| (name, ty.typed()));
-            
-            let mut args = head_args
-                .map(|(name, type_)| {
-                    new.shadowed_variables.insert(name.clone(), 0);
-                    new.transpile_declaration(type_, name)
-                })
-                .collect::<Vec<String>>()
-                .join(", ");
-
-            if args.is_empty() {
-                args = "void".to_string();
-            }
-            
-            let func_name = if func.head.no_mangle {
-                name.clone()
-            } else {
-                new.mangle_function(
-                    &new.scope.make_path_absolute(vec![name.clone()]).expect("referenced path exists"),
-                    &func.head
-                ) 
+            let funcs = match func {
+                MaybeGeneric::NonGeneric(func) => {
+                    vec![func]
+                },
+                MaybeGeneric::Generic(gfun) => {
+                    gfun.specializations.values().collect()
+                }
             };
-            let declaration = new
-                .transpile_declaration(func.head.return_type.typed(), &format!("{func_name}({args})"));
-
-            let mut code = vec![];
-            new.indent += 1;
-            for stmt in &func.statements {
-                code.push(new.transpile_statement(stmt))
+            for func in funcs {
+                let head_args = func.head.arguments.iter().map(|(name, ty)| (name, ty.typed()));
+            
+                let mut args = head_args
+                    .map(|(name, type_)| {
+                        new.shadowed_variables.insert(name.clone(), 0);
+                        new.transpile_declaration(type_, name)
+                    })
+                    .collect::<Vec<String>>()
+                    .join(", ");
+    
+                if args.is_empty() {
+                    args = "void".to_string();
+                }
+                
+                let func_name = if func.head.no_mangle {
+                    name.clone()
+                } else {
+                    new.mangle_function(
+                        &new.scope.make_path_absolute(vec![name.clone()]).expect("referenced path exists"),
+                        &func.head
+                    ) 
+                };
+                let declaration = new
+                    .transpile_declaration(func.head.return_type.typed(), &format!("{func_name}({args})"));
+    
+                let mut code = vec![];
+                new.indent += 1;
+                for stmt in &func.statements {
+                    code.push(new.transpile_statement(stmt))
+                }
+                new.shadowed_variables.clear();
+                new.indent -= 1;
+                //new.source.pop();
+                new.functions.push((declaration, code.join("\n")))
+    
             }
-            new.shadowed_variables.clear();
-            new.indent -= 1;
-            //new.source.pop();
-            new.functions.push((declaration, code.join("\n")))
-
         }
 
         for (method, func) in &new.scope.declared_methods {
@@ -91,7 +101,7 @@ impl<'a> ModuleTranspiler<'a> {
 
             // args is never empty since it has at least a receiver
 
-            let name = new.mangle_method(&receiver, method, &new.scope.path, &func.head);
+            let name = new.mangle_method(&receiver, method, &func.head);
             let declaration = new
                 .transpile_declaration(&func.head.return_type.typed(), &format!("{name}({args})"));
 
@@ -266,7 +276,7 @@ impl<'a> ModuleTranspiler<'a> {
             ExpressionData::MethodCall { method, arguments, head } => {
                 let receiver = arguments[0].type_.clone();
                 
-                let name = self.mangle_method(&receiver, &method, &head.source, &head.head);
+                let name = self.mangle_method(&receiver, &method, &head.head);
                 let args = arguments
                     .into_iter()
                     .map(|e| self.transpile_expression(&e.data))
@@ -444,7 +454,7 @@ impl<'a> ModuleTranspiler<'a> {
         }
     }
 
-    fn mangle_method(&self, receiver: &Type, method: &String, impl_module: &Vec<String>, head: &FunctionHead) -> String {
+    fn mangle_method(&self, receiver: &Type, method: &String, head: &FunctionHead) -> String {
         let head_args = head.arguments.iter().map(|(name, ty)| (name, ty.typed())).peekable();
         let mut args = String::with_capacity(head_args.len());
         
@@ -454,7 +464,7 @@ impl<'a> ModuleTranspiler<'a> {
 
         let return_type = self.mangle_type(head.return_type.typed());
 
-        format!("{}M{}{}{}{args}R{return_type}", Self::MANGLE_PREFIX, self.mangle_type(receiver), self.mangle_path(&impl_module), self.mangle_ident(method))
+        format!("{}M{}{}{args}R{return_type}", Self::MANGLE_PREFIX, self.mangle_type(receiver), self.mangle_ident(method))
     }
 
     fn mangle_function(&self, path: &Vec<String>, head: &FunctionHead) -> String {

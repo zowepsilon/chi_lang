@@ -1,0 +1,7 @@
+extern "<stdio.h>" {
+    def printf(fmt_str: str, ...)
+}
+
+def main() {
+    printf("Hello, World!\n")
+}
